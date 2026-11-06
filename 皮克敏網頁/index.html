@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#176b45">
+<title>皮克敏飛人｜全台座標資料庫</title>
+<style>
+:root{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;color:#20252b;background:#f3f6f4}
+*{box-sizing:border-box}body{margin:0;max-width:1050px;padding:16px;margin-inline:auto}
+header{padding:12px 2px 16px}h1{margin:0 0 5px;font-size:26px}.muted{color:#66736b;font-size:13px}
+.panel,.card{background:#fff;border:1px solid #dfe8e2;border-radius:15px;padding:14px;margin:10px 0;box-shadow:0 2px 8px #102b1a08}
+.toolbar{display:grid;grid-template-columns:1fr 170px;gap:9px}
+input,select{width:100%;padding:11px;border:1px solid #ccd8d0;border-radius:10px;font:inherit;background:white}
+button{border:0;border-radius:10px;padding:10px 13px;background:#176b45;color:white;font:inherit;font-weight:650;cursor:pointer}
+button.alt{background:#edf5ef;color:#175b3b;border:1px solid #d2e3d7}button.danger{background:#a83232}
+.actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+.stats{font-size:13px;color:#647168;margin-top:10px}
+.card{display:grid;grid-template-columns:1fr auto;gap:12px;align-items:center}
+.store-name{font-weight:750;margin-bottom:5px}.coord{font:14px ui-monospace,Consolas,monospace;color:#3d4941;overflow-wrap:anywhere}
+.card-actions{display:flex;flex-direction:column;gap:7px;min-width:100px}
+.card-actions button{font-size:13px;padding:9px}.map{font-size:13px;color:#176b45;text-align:center;text-decoration:none;padding:4px}
+.hidden{display:none!important}.notice{padding:11px;border-radius:10px;background:#fff8e5;color:#75531b;font-size:13px}
+.formgrid{display:grid;grid-template-columns:1.2fr 1fr 1fr;gap:8px}
+.adminbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;justify-content:space-between}
+h2{font-size:17px;margin:0 0 10px}.empty{text-align:center;color:#748078;padding:25px}
+footer{font-size:12px;color:#77827a;padding:12px 2px}
+@media(max-width:620px){body{padding:10px}.toolbar,.formgrid{grid-template-columns:1fr}.card{grid-template-columns:1fr}.card-actions{flex-direction:row}.card-actions button{flex:1}}
+</style>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="config.js"></script>
+</head>
+<body>
+<header>
+<h1>🍄 皮克敏飛人｜全台座標資料庫</h1>
+<div class="muted">搜尋店家・一鍵複製座標・一起補齊全台地點</div>
+</header>
+
+<section class="panel">
+<div class="toolbar">
+<input id="search" type="search" placeholder="搜尋店名或座標，例如：竹北、夢時代">
+<select id="region"><option value="">全部縣市／地區</option></select>
+</div>
+<div class="actions">
+<button id="copyAll">複製目前顯示的全部座標</button>
+<button class="alt" id="copyNames">複製店名＋座標</button>
+<button class="alt" id="refresh">重新整理</button>
+</div>
+<div class="stats" id="stats">正在載入資料…</div>
+<div class="muted">排序方式：依緯度由北到南；新增或修改座標後會自動重新排序。</div>
+<div id="status" class="muted"></div>
+</section>
+
+<section class="panel">
+<div class="adminbar">
+<div><h2>管理員</h2><div class="muted" id="adminState">一般訪客模式：只能查詢及複製</div></div>
+<button class="alt" id="loginToggle">管理員登入</button>
+</div>
+<div id="loginPanel" class="hidden" style="margin-top:12px">
+<div class="formgrid">
+<input id="email" type="email" placeholder="管理員 Email">
+<input id="password" type="password" placeholder="管理員密碼">
+<button id="login">登入</button>
+</div>
+<div class="muted" style="margin-top:7px">管理員帳號需先在 Supabase 建立並授權；本網站不提供公開註冊。</div>
+</div>
+<div id="editor" class="hidden" style="margin-top:14px">
+<h2>新增／修改店家</h2>
+<div class="formgrid">
+<input id="storeName" placeholder="店家名稱">
+<input id="latitude" inputmode="decimal" placeholder="緯度">
+<input id="longitude" inputmode="decimal" placeholder="經度">
+</div>
+<div class="actions">
+<button id="saveStore">新增座標</button>
+<button class="alt hidden" id="cancelEdit">取消修改</button>
+<button class="alt" id="logout">登出</button>
+</div>
+</div>
+</section>
+
+<main id="list"></main>
+<footer>座標格式：緯度, 經度。公開訪客只能讀取資料；新增、修改及刪除僅限管理員帳號。</footer>
+<script>
+const $ = id => document.getElementById(id);
+const regions = ["高雄","台南","金門","宜蘭","嘉義","雲林","南投","彰化","台中","苗栗","基隆","新竹"];
+const regionOf = name => regions.find(r=>name.startsWith(r)) || "其他";
+regions.forEach(r=>{const o=document.createElement("option");o.value=r;o.textContent=r;$("region").append(o)});
+let db=null, stores=[], session=null, editingId=null;
+const configured = window.SUPABASE_URL && window.SUPABASE_ANON_KEY &&
+ !window.SUPABASE_URL.includes("PASTE_") && !window.SUPABASE_ANON_KEY.includes("PASTE_");
+if(configured && window.supabase) db=window.supabase.createClient(window.SUPABASE_URL,window.SUPABASE_ANON_KEY);
+
+function coord(s){return `${Number(s.latitude).toFixed(7)}, ${Number(s.longitude).toFixed(7)}`}
+function filtered(){const q=$("search").value.trim().toLowerCase(),r=$("region").value;return stores.filter(s=>(!r||regionOf(s.name)===r)&&(!q||s.name.toLowerCase().includes(q)||coord(s).includes(q)))}
+async function copyText(t,btn){try{await navigator.clipboard.writeText(t);const old=btn.textContent;btn.textContent="已複製 ✓";setTimeout(()=>btn.textContent=old,1200)}catch(e){prompt("請手動複製以下內容：",t)}}
+function render(){
+ const rows=filtered();$("stats").textContent=`目前顯示 ${rows.length} / ${stores.length} 間店`;
+ $("list").innerHTML="";
+ if(!rows.length){$("list").innerHTML='<div class="panel empty">沒有符合的店家</div>';return}
+ rows.forEach(s=>{
+  const card=document.createElement("article");card.className="card";
+  const info=document.createElement("div"),name=document.createElement("div"),c=document.createElement("div"),region=document.createElement("div");
+  name.className="store-name";name.textContent=s.name;c.className="coord";c.textContent=coord(s);region.className="muted";region.textContent=regionOf(s.name);
+  info.append(name,c,region);
+  const acts=document.createElement("div");acts.className="card-actions";
+  const copy=document.createElement("button");copy.textContent="複製座標";copy.onclick=()=>copyText(coord(s),copy);
+  const map=document.createElement("a");map.className="map";map.target="_blank";map.rel="noopener";map.href=`https://www.google.com/maps?q=${s.latitude},${s.longitude}`;map.textContent="查看地圖 ↗";
+  acts.append(copy,map);
+  if(session){const edit=document.createElement("button");edit.className="alt";edit.textContent="修改";edit.onclick=()=>startEdit(s);const del=document.createElement("button");del.className="danger";del.textContent="刪除";del.onclick=()=>deleteStore(s);acts.append(edit,del)}
+  card.append(info,acts);$("list").append(card);
+ });
+}
+async function loadStores(){
+ if(!db){$("status").innerHTML='<div class="notice">網站資料庫尚未設定。請先完成 Supabase 設定，再公開網站。</div>';return}
+ $("status").textContent="正在同步雲端資料…";
+ const {data,error}=await db.from("stores").select("*").order("latitude",{ascending:false}).order("name",{ascending:true});
+ if(error){$("status").textContent="讀取失敗："+error.message;return}
+ stores=data||[];$("status").textContent="雲端資料已同步";render();
+}
+function setAdminUI(){
+ $("adminState").textContent=session?"已登入管理員：可新增、修改及刪除":"一般訪客模式：只能查詢及複製";
+ $("loginToggle").classList.toggle("hidden",!!session);$("loginPanel").classList.add("hidden");
+ $("editor").classList.toggle("hidden",!session);render();
+}
+async function checkSession(){if(!db)return;const {data}=await db.auth.getSession();session=data.session;setAdminUI()}
+$("search").oninput=render;$("region").onchange=render;$("refresh").onclick=loadStores;
+$("copyAll").onclick=e=>{const rows=filtered();if(rows.length)copyText(rows.map(coord).join("\n"),e.currentTarget)};
+$("copyNames").onclick=e=>{const rows=filtered();if(rows.length)copyText(rows.map(s=>`${s.name} ${coord(s)}`).join("\n"),e.currentTarget)};
+$("loginToggle").onclick=()=>$("loginPanel").classList.toggle("hidden");
+$("login").onclick=async()=>{
+ if(!db)return alert("資料庫尚未設定");
+ const {data,error}=await db.auth.signInWithPassword({email:$("email").value,password:$("password").value});
+ if(error)return alert("登入失敗："+error.message);session=data.session;setAdminUI();
+};
+$("logout").onclick=async()=>{await db.auth.signOut();session=null;editingId=null;setAdminUI()};
+function startEdit(s){editingId=s.id;$("storeName").value=s.name;$("latitude").value=s.latitude;$("longitude").value=s.longitude;$("saveStore").textContent="儲存修改";$("cancelEdit").classList.remove("hidden");window.scrollTo({top:0,behavior:"smooth"})}
+$("cancelEdit").onclick=()=>{editingId=null;$("storeName").value=$("latitude").value=$("longitude").value="";$("saveStore").textContent="新增座標";$("cancelEdit").classList.add("hidden")};
+$("saveStore").onclick=async()=>{
+ const name=$("storeName").value.trim(),latitude=Number($("latitude").value),longitude=Number($("longitude").value);
+ if(!name||!$("latitude").value||!$("longitude").value||!Number.isFinite(latitude)||!Number.isFinite(longitude)||latitude < -90||latitude>90||longitude < -180||longitude>180)return alert("請輸入正確的店名、緯度及經度");
+ const payload={name,latitude,longitude,updated_at:new Date().toISOString()};
+ const result=editingId?await db.from("stores").update(payload).eq("id",editingId):await db.from("stores").insert(payload);
+ if(result.error)return alert("儲存失敗："+result.error.message);
+ $("cancelEdit").click();await loadStores();alert("已儲存座標");
+};
+async function deleteStore(s){if(!confirm(`確定刪除「${s.name}」？`))return;const {error}=await db.from("stores").delete().eq("id",s.id);if(error)return alert("刪除失敗："+error.message);await loadStores()}
+if(db){checkSession();loadStores();db.auth.onAuthStateChange((_event,s)=>{session=s;setAdminUI()});db.channel("stores-live").on("postgres_changes",{event:"*",schema:"public",table:"stores"},()=>loadStores()).subscribe()}
+else {setAdminUI();$("status").innerHTML='<div class="notice">尚未填入 Supabase 專案設定。完成設定後，這裡會自動載入雲端資料。</div>'}
+</script>
+</body></html>
