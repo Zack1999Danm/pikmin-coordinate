@@ -47,6 +47,7 @@ footer{font-size:12px;color:#77827a;padding:12px 2px}
 <button class="alt" id="refresh">重新整理</button>
 </div>
 <div class="stats" id="stats">正在載入資料…</div>
+<div class="muted">排序方式：依緯度由北到南；新增或修改座標後會自動重新排序。</div>
 <div id="status" class="muted"></div>
 </section>
 
@@ -113,7 +114,7 @@ function render(){
 async function loadStores(){
  if(!db){$("status").innerHTML='<div class="notice">網站資料庫尚未設定。請先完成 Supabase 設定，再公開網站。</div>';return}
  $("status").textContent="正在同步雲端資料…";
- const {data,error}=await db.from("stores").select("*").order("name");
+ const {data,error}=await db.from("stores").select("*").order("latitude",{ascending:false}).order("name",{ascending:true});
  if(error){$("status").textContent="讀取失敗："+error.message;return}
  stores=data||[];$("status").textContent="雲端資料已同步";render();
 }
